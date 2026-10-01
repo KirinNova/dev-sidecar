@@ -9,15 +9,6 @@ function getRunningJsonPath () {
   return path.join(getUserBase(), 'running.json')
 }
 
-function isAlive (pid) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
 // 插件列表：free_eye 是一次性插件，无持久化状态，不显示；
 // overwall 仅解锁后（setting.json 中 overwall === true）才显示
 function getPluginNames () {
@@ -31,7 +22,7 @@ function getPluginNames () {
   return names
 }
 
-function printStatus (status) {
+async function printStatus (status) {
   const serverRunning = status.server?.enabled || false
   const proxyEnabled = status.proxy?.enabled || false
 
@@ -41,11 +32,11 @@ function printStatus (status) {
     autoStart = isInstalled() ? '已注册' : '未注册'
   } catch {}
 
-  // 读取 running.json 中的实例信息
   let instanceInfo = ''
   try {
     const DevSidecar = require('@docmirror/dev-sidecar')
-    const instance = DevSidecar.api.instance.readInstance()
+    // 修复：readInstance 大概率是异步方法，必须加 await
+    const instance = await DevSidecar.api.instance.readInstance()
     if (instance) {
       instanceInfo = `  运行实例:  ${instance.type === 'gui' ? 'GUI' : 'CLI'}${instance.pid ? ` (PID: ${instance.pid})` : ''}${instance.startTime ? `，启动于 ${instance.startTime}` : ''}`
     }
@@ -68,7 +59,6 @@ function printStatus (status) {
 }
 
 async function showStatus () {
-  // 锁新鲜 = 有实例在运行（GUI 或 CLI），替代 status.json/PID 文件判断
   const DevSidecar = require('@docmirror/dev-sidecar')
   const running = await DevSidecar.api.instance.isLocked()
 
@@ -84,14 +74,16 @@ async function showStatus () {
     return
   }
 
-  // 读取 running.json 中的运行时状态（由状态事件驱动写入）
   let status = {}
   try {
     const data = JSON.parse(fs.readFileSync(getRunningJsonPath(), 'utf-8'))
     status = data?.app?.status || {}
   } catch {}
 
-  printStatus(status)
+  await printStatus(status)
 }
 
-module.exports = { showStatus, getPluginNames }
+module.exports = {
+  showStatus,
+  getPluginNames,
+}
