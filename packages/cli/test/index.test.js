@@ -81,7 +81,7 @@ describe('index', function () {
 
   describe('help command', function () {
     it('should display help with ds-cli help', function () {
-      const out = execSync(`node ${cliPath} help`, { encoding: 'utf-8' })
+      const out = execSync(`node "${cliPath}" help`, { encoding: 'utf-8' })
       assert.include(out, '用法: ds-cli <命令>')
       assert.include(out, 'start')
       assert.include(out, 'stop')
@@ -95,7 +95,7 @@ describe('index', function () {
     })
 
     it('should show all commands in help', function () {
-      const out = execSync(`node ${cliPath} help`, { encoding: 'utf-8' })
+      const out = execSync(`node "${cliPath}" help`, { encoding: 'utf-8' })
       assert.include(out, '启动守护进程')
       assert.include(out, '停止守护进程')
       assert.include(out, '重启守护进程')
@@ -106,7 +106,7 @@ describe('index', function () {
     })
 
     it('should show options in help', function () {
-      const out = execSync(`node ${cliPath} help`, { encoding: 'utf-8' })
+      const out = execSync(`node "${cliPath}" help`, { encoding: 'utf-8' })
       assert.include(out, '--gui')
       assert.include(out, '--all')
     })
@@ -114,7 +114,7 @@ describe('index', function () {
 
   describe('version command', function () {
     it('should display version number', function () {
-      const out = execSync(`node ${cliPath} version`, { encoding: 'utf-8' }).trim()
+      const out = execSync(`node "${cliPath}" version`, { encoding: 'utf-8' }).trim()
       assert.match(out, /^\d+\.\d+\.\d+$/)
     })
   })
@@ -122,7 +122,7 @@ describe('index', function () {
   describe('unknown command', function () {
     it('should show error and help for unknown command', function () {
       try {
-        execSync(`node ${cliPath} foobar`, { encoding: 'utf-8' })
+        execSync(`node "${cliPath}" foobar`, { encoding: 'utf-8' })
         assert.fail('should have thrown')
       } catch (e) {
         assert.include(e.stderr, '未知命令: foobar')
