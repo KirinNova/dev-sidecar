@@ -3,12 +3,13 @@ const path = require('node:path')
 const { execSync } = require('node:child_process')
 
 function getExePath () {
-  // SEA 模式: process.argv[0] 就是 ds-cli 二进制
-  // 开发模式: process.argv[0] 是 node, process.argv[1] 是 cli.js
   if (process.argv[0] && !process.argv[0].includes('node')) {
     return process.argv[0]
   }
-  return `${process.argv[0]} ${process.argv[1]}`
+  // 开发模式下，返回 node 路径和脚本路径，并确保各自加上引号以防路径含空格
+  const nodePath = process.argv[0]
+  const scriptPath = process.argv[1]
+  return `"${nodePath}" "${scriptPath}"`
 }
 
 function tryExec (cmd) {
@@ -34,7 +35,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${exePath} start --daemon
+ExecStart=${exePath} start
 Restart=on-failure
 RestartSec=5
 
@@ -86,6 +87,19 @@ const MAC_PLIST_PATH = path.join(
 function installMac () {
   const exePath = getExePath()
   const logPath = path.join(process.env.HOME || '/', '.dev-sidecar/logs/cli.log')
+  
+  // 如果是开发模式（带空格的组合路径），launchd 的 ProgramArguments 需要拆成多项
+  let args = []
+  if (process.argv[0] && !process.argv[0].includes('node')) {
+    args = [`<string>${process.argv[0]}</string>`, '<string>start</string>']
+  } else {
+    args = [
+      `<string>${process.argv[0]}</string>`,
+      `<string>${process.argv[1]}</string>`,
+      '<string>start</string>',
+    ]
+  }
+
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -94,8 +108,7 @@ function installMac () {
   <string>com.dev-sidecar.cli</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${exePath}</string>
-    <string>start</string>
+    ${args.join('\n    ')}
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -139,9 +152,14 @@ const WIN_REG_VALUE = 'ds-cli'
 
 function installWindows () {
   const exePath = getExePath()
+  // Windows 注册表 Run 键值格式要求：如果是带参数的命令，整体带引号或者用绝对路径
+  const regCommand = process.argv[0] && !process.argv[0].includes('node')
+    ? `"${exePath}" start`
+    : `"${process.argv[0]}" "${process.argv[1]}" start`
+
   try {
     execSync(
-      `reg add "${WIN_REG_KEY}" /v "${WIN_REG_VALUE}" /t REG_SZ /d "\\"${exePath}\\" start" /f`,
+      `reg add "${WIN_REG_KEY}" /v "${WIN_REG_VALUE}" /t REG_SZ /d "${regCommand.replace(/"/g, '\\"')}" /f`,
       { stdio: 'ignore' },
     )
     console.log('已注册开机自启动 (注册表)')
