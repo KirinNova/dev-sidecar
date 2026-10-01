@@ -47,8 +47,13 @@ function runDaemon () {
       log.error('写入 running.json 实例信息失败:', e.message)
     }
 
-    const banner = fs.readFileSync(path.join(__dirname, 'banner.txt'))
-    log.info(banner.toString())
+    try {
+      const bannerPath = path.join(__dirname, 'banner.txt')
+      if (fs.existsSync(bannerPath)) {
+        const banner = fs.readFileSync(bannerPath)
+        log.info(banner.toString())
+      }
+    } catch {}
 
     DevSidecar.api.config.reload()
     await DevSidecar.api.startup({ mitmproxyPath })
@@ -58,7 +63,9 @@ function runDaemon () {
 
   async function onClose () {
     log.info('on sigint')
-    await DevSidecar.api.shutdown()
+    try {
+      await DevSidecar.api.shutdown()
+    } catch {}
     log.info('on closed')
     cleanupFiles()
     process.exit(0)
@@ -120,14 +127,16 @@ function routeCommand (args) {
       const tasks = []
       if (runCli) tasks.push(startDaemon())
       if (runGui) tasks.push(Promise.resolve(startGui()))
-      Promise.all(tasks).then(() => process.exit(0))
+      Promise.all(tasks).then(() => process.exit(0)).catch(() => process.exit(1))
       break
     }
     case 'stop': {
       const { stopDaemon } = require('./commands/stop')
       const { stopGui } = require('./commands/gui')
-      if (runCli) stopDaemon()
-      if (runGui) stopGui()
+      const tasks = []
+      if (runCli) tasks.push(stopDaemon())
+      if (runGui) tasks.push(Promise.resolve(stopGui()))
+      Promise.all(tasks).then(() => process.exit(0)).catch(() => process.exit(1))
       break
     }
     case 'restart': {
@@ -136,35 +145,42 @@ function routeCommand (args) {
       const tasks = []
       if (runCli) tasks.push(restartDaemon())
       if (runGui) tasks.push(Promise.resolve(restartGui()))
-      Promise.all(tasks).then(() => process.exit(0))
+      Promise.all(tasks).then(() => process.exit(0)).catch(() => process.exit(1))
       break
     }
     case 'status': {
       const { showStatus } = require('./commands/status')
-      showStatus().then(() => process.exit(0))
+      showStatus().then(() => process.exit(0)).catch(() => process.exit(1))
       break
     }
     case 'version': {
-      const pkgPath = path.join(__dirname, '../package.json')
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
-      console.log(pkg.version)
-      break
+      try {
+        const pkgPath = path.join(__dirname, '../package.json')
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
+        console.log(pkg.version)
+      } catch {
+        console.log('unknown')
+      }
+      process.exit(0)
     }
     case 'plugin': {
       const { handlePlugin } = require('./commands/plugin')
-      handlePlugin(value, positional[2])
+      Promise.resolve(handlePlugin(value, positional[2]))
+        .then(() => process.exit(0))
+        .catch((e) => {
+          console.error(`插件操作失败: ${e?.message || e}`)
+          process.exit(1)
+        })
       break
     }
     case 'proxy': {
       const { readConfig, writeConfig } = require('./commands/gui')
       if (value === 'on' || value === 'off') {
-        // 持久化到 config.json
-        const config = readConfig()
+        const config = readConfig() || {}
         config.proxy = config.proxy || {}
         config.proxy.enabled = value === 'on'
         writeConfig(config)
 
-        // fork worker 立即设置/取消系统代理
         const { fork } = require('node:child_process')
         const workerPath = path.join(__dirname, 'proxy-worker.js')
         const child = fork(workerPath, [value])
@@ -189,16 +205,16 @@ function routeCommand (args) {
     }
     case 'help': {
       printHelp()
-      break
+      process.exit(0)
     }
     default:
       if (flags.includes('--help') || flags.includes('-h')) {
         printHelp()
+        process.exit(0)
       } else {
         console.error(`未知命令: ${command}`)
         printHelp()
         process.exit(1)
       }
-      process.exit(1)
   }
 }
