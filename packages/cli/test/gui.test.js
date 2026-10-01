@@ -2,18 +2,30 @@ const { assert } = require('chai')
 const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
+const { execSync } = require('node:child_process')
 
 describe('gui', function () {
   function withTempHome (fn) {
     const originalHome = process.env.HOME
+    const originalUserProfile = process.env.USERPROFILE
+    
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-cli-test-'))
     const userBase = path.join(tmpDir, '.dev-sidecar')
     fs.mkdirSync(userBase, { recursive: true })
+    
+    // 同时适配 HOME 与 Windows 的 USERPROFILE
     process.env.HOME = tmpDir
+    process.env.USERPROFILE = tmpDir
+
     try {
       fn(userBase, tmpDir)
     } finally {
       process.env.HOME = originalHome
+      if (originalUserProfile !== undefined) {
+        process.env.USERPROFILE = originalUserProfile
+      } else {
+        delete process.env.USERPROFILE
+      }
       fs.rmSync(tmpDir, { recursive: true, force: true })
     }
   }
@@ -61,12 +73,16 @@ describe('gui', function () {
   })
 
   describe('GUI process detection', function () {
-    const { execSync } = require('node:child_process')
-
     it('should not find a non-existent GUI process', function () {
       let found = true
       try {
-        execSync('pgrep -x dev-sidecar_nonexistent_name', { stdio: 'ignore' })
+        if (os.platform() === 'win32') {
+          // Windows 平台下使用 tasklist 替代 pgrep 进行检测
+          const output = execSync('tasklist /fi "imagename eq dev-sidecar_nonexistent_name.exe"', { encoding: 'utf8' })
+          found = output.includes('dev-sidecar_nonexistent_name.exe')
+        } else {
+          execSync('pgrep -x dev-sidecar_nonexistent_name', { stdio: 'ignore' })
+        }
       } catch {
         found = false
       }
