@@ -39,8 +39,6 @@ function isGuiRunningSync () {
       })
       return out.includes('dev-sidecar.exe')
     }
-    // Linux/macOS: 检查 dev-sidecar (Electron GUI) 进程
-    // GUI 进程特征：包含 electron 或 .app（macOS 应用包）
     const out = execSync('pgrep -x dev-sidecar', { encoding: 'utf-8' }).trim()
     if (!out) return false
     const pids = out.split('\n').filter(Boolean)
@@ -72,7 +70,6 @@ function getGuiPidByPort () {
       }
       return null
     }
-    // Linux/macOS: 查找 GUI 进程
     const out = execSync('pgrep -x dev-sidecar', { encoding: 'utf-8' }).trim()
     if (!out) return null
     const pids = out.split('\n').filter(Boolean)
@@ -166,7 +163,12 @@ function writeConfig (config) {
 }
 
 module.exports = {
-  isGuiRunning, isPortInUse, getProxyPort,
-  startGui, stopGui, restartGui,
-  readConfig, writeConfig,
+  isGuiRunning,
+  isPortInUse,
+  getProxyPort,
+  startGui,
+  stopGui,
+  restartGui,
+  readConfig,
+  writeConfig,
 }
