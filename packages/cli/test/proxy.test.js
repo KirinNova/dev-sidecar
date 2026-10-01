@@ -12,10 +12,19 @@ describe('proxy', function () {
 
   describe('readConfig/writeConfig', function () {
     it('should read existing config', function () {
-      const configPath = path.join(getUserBase(), 'config.json')
-      if (fs.existsSync(configPath)) {
-        const config = jsonApi.parse(fs.readFileSync(configPath, 'utf-8'))
-        assert.isObject(config)
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-cli-test-'))
+      try {
+        const configPath = path.join(tmpDir, 'config.json')
+        const sampleConfig = { server: { port: 31181 } }
+        fs.writeFileSync(configPath, jsonApi.stringify(sampleConfig))
+        
+        if (fs.existsSync(configPath)) {
+          const config = jsonApi.parse(fs.readFileSync(configPath, 'utf-8'))
+          assert.isObject(config)
+          assert.strictEqual(config.server.port, 31181)
+        }
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true })
       }
     })
 
@@ -96,7 +105,6 @@ describe('proxy', function () {
     it('should detect zsh from SHELL env', function () {
       const originalShell = process.env.SHELL
       process.env.SHELL = '/bin/zsh'
-      // 模拟 detectShell 逻辑
       const shell = process.env.SHELL || ''
       const detected = shell.includes('zsh') ? 'zsh' : shell.includes('bash') ? 'bash' : 'bash'
       assert.strictEqual(detected, 'zsh')
