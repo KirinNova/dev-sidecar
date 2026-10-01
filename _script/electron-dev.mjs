@@ -2,16 +2,26 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
+import { parseArgs } from 'node:util'
 
 const guiDir = process.cwd()
 const require = createRequire(import.meta.url)
 
 function resolveDevServer () {
-  const argv = process.argv.slice(2)
-  const portIndex = argv.indexOf('--port')
-  const port = portIndex >= 0 ? Number.parseInt(argv[portIndex + 1], 10) : 8080
+  const { values } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      port: {
+        type: 'string',
+        default: '8080',
+      },
+    },
+    strict: false,
+  })
+
+  const port = Number.parseInt(values.port, 10)
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`无效的端口号: ${argv[portIndex + 1]}`)
+    throw new Error(`无效的端口号: ${values.port}`)
   }
   return { port, url: `http://localhost:${port}` }
 }
@@ -29,7 +39,7 @@ function spawnCommand (entry, args = [], extraEnv = {}) {
     env: { ...process.env, ...extraEnv },
     shell: false,
     stdio: 'inherit',
-    windowsHide: false,
+    windowsHide: true,
   })
 }
 
@@ -45,32 +55,29 @@ function resolveElectronBin () {
 
 async function waitForServer (url, child) {
   const timeoutAt = Date.now() + 120000
+  console.log(`正在等待开发服务器启动 (${url})...`)
 
   while (Date.now() < timeoutAt) {
     if (child.exitCode != null || child.signalCode != null) {
-      throw new Error('Dev server exited before it became ready')
+      throw new Error('开发服务器在就绪前意外退出')
     }
 
     try {
-      const response = await fetch(url, { method: 'GET' })
-      if (response.ok || response.status >= 200) {
-        return
-      }
-    } catch {
-      // Keep polling until the dev server is reachable.
-    }
+      await fetch(url, { method: 'GET' })
+      console.log('开发服务器已就绪')
+      return
+    } catch {}
 
     await delay(500)
   }
 
-  throw new Error(`Timed out waiting for ${url}`)
+  throw new Error(`等待服务启动超时: ${url}`)
 }
 
 function stopChild (child) {
   if (!child || child.exitCode != null || child.signalCode != null) {
     return
   }
-
   child.kill('SIGTERM')
 }
 
@@ -80,39 +87,49 @@ async function shutdown (code = 0) {
   }
 
   state.closing = true
+  console.log('正在安全关闭所有进程...')
+  
   stopChild(state.electron)
   stopChild(state.devServer)
+
   process.exitCode = code
 }
 
-process.on('SIGINT', () => {
-  void shutdown(0)
-})
-process.on('SIGTERM', () => {
-  void shutdown(0)
-})
+process.on('SIGINT', () => void shutdown(0))
+process.on('SIGTERM', () => void shutdown(0))
 
 async function main () {
   const vueCliServiceBin = resolveVueCliServiceBin()
   const electronBin = resolveElectronBin()
 
-  state.devServer = spawnCommand(process.execPath, [vueCliServiceBin, 'serve', '--port', String(devServerPort)])
+  console.log('正在启动 Vue CLI 开发服务器...')
+  state.devServer = spawnCommand(process.execPath, [
+    vueCliServiceBin,
+    'serve',
+    '--port',
+    String(devServerPort),
+  ])
+
   state.devServer.on('exit', (code, signal) => {
     if (!state.closing) {
+      console.warn('开发服务器意外终止')
       void shutdown(code ?? (signal ? 1 : 0))
     }
   })
 
   try {
     await waitForServer(devServerUrl, state.devServer)
+
+    console.log('正在启动 Electron 客户端...')
     state.electron = spawnCommand(electronBin, ['.'], {
       WEBPACK_DEV_SERVER_URL: devServerUrl,
     })
+
     state.electron.on('exit', (code, signal) => {
       void shutdown(code ?? (signal ? 1 : 0))
     })
   } catch (error) {
-    console.error(error)
+    console.error('启动失败:', error.message)
     await shutdown(1)
   }
 }
