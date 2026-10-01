@@ -17,25 +17,37 @@ function sleep (ms) {
 async function restartDaemon () {
   const { startDaemon } = require('./start')
 
-  // 先停止
   if (fs.existsSync(PID_FILE)) {
-    const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10)
-    if (isAlive(pid)) {
+    const content = fs.readFileSync(PID_FILE, 'utf-8').trim()
+    const pid = parseInt(content, 10)
+
+    if (!isNaN(pid) && pid > 0 && isAlive(pid)) {
       console.log(`正在停止 dev-sidecar (PID: ${pid})...`)
       process.kill(pid, 'SIGINT')
 
-      // 等待进程退出（最多 5 秒）
       for (let i = 0; i < 50; i++) {
         if (!isAlive(pid)) break
         await sleep(100)
       }
 
-      // 清理残留的 PID 文件
-      if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE)
+      if (isAlive(pid)) {
+        console.log(`进程未响应 SIGINT，正在强制终止 (PID: ${pid})...`)
+        try {
+          process.kill(pid, 'SIGKILL')
+          await sleep(200)
+        } catch (e) {
+          console.error(`强制终止进程失败: ${e.message}`)
+        }
+      }
+    }
+
+    if (fs.existsSync(PID_FILE)) {
+      try {
+        fs.unlinkSync(PID_FILE)
+      } catch {}
     }
   }
 
-  // 再启动
   await startDaemon()
 }
 
