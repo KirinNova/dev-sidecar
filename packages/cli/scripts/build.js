@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-// ds-cli SEA 打包脚本
-// 用法:
-//   node scripts/build.js          # 仅打包本机平台
-//   node scripts/build.js --all    # 打包所有平台（从 Node.js 官方获取可用平台列表）
 
 const fs = require('node:fs')
 const path = require('node:path')
@@ -18,8 +14,6 @@ const DIST = path.join(ROOT, 'dist')
 const VERSION = require(path.join(ROOT, 'package.json')).version
 const NODE_VERSION = 'v24.14.0'
 const SENTINEL = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'
-
-// ── 平台识别 ──────────────────────────────────────────
 
 function getCurrentPlatform () {
   const p = process.platform
@@ -54,8 +48,6 @@ function getOutputName (platform) {
     : `ds-cli-${VERSION}-${platform}`
 }
 
-// ── 下载与校验 ────────────────────────────────────────
-
 function download (url, dest) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https') ? https : http
@@ -86,8 +78,6 @@ async function extractTarGz (tarPath, destDir) {
   await tar.extract({ file: tarPath, cwd: destDir })
 }
 
-// ── 动态获取可用平台 + 校验和 ──────────────────────────
-
 async function fetchChecksums () {
   const url = `https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt`
   const tmpFile = path.join(DIST, 'shasums.txt')
@@ -96,7 +86,7 @@ async function fetchChecksums () {
   const content = fs.readFileSync(tmpFile, 'utf-8')
   fs.unlinkSync(tmpFile)
 
-  const checksums = {} // filename -> sha256
+  const checksums = {}
   const platforms = new Set()
 
   for (const line of content.split('\n')) {
@@ -107,7 +97,6 @@ async function fetchChecksums () {
 
     checksums[filename] = hash
 
-    // 从文件名提取平台
     const tarMatch = filename.match(/node-v[^ ]+?-(linux|darwin|aix|sunos)-(x64|arm64|armv7l|ppc64|s390x)\.tar\.gz$/)
     if (tarMatch) {
       const mapped = mapNodePlatform(`${tarMatch[1]}-${tarMatch[2]}`)
@@ -136,8 +125,6 @@ function mapNodePlatform (nodePlatform) {
   return map[nodePlatform]
 }
 
-// ── 增量构建 ──────────────────────────────────────────
-
 function hashDir (hash, dir) {
   if (!fs.existsSync(dir)) return
   for (const f of fs.readdirSync(dir, { recursive: true })) {
@@ -149,14 +136,10 @@ function hashDir (hash, dir) {
 
 function computeSourceHash () {
   const hash = crypto.createHash('sha256')
-  // 入口文件
   hash.update(fs.readFileSync(path.join(ROOT, 'src/sea-entry.js')))
-  // src/ 下所有 js 文件
   hashDir(hash, path.join(ROOT, 'src'))
-  // 打包进 bundle 的依赖源码（core / mitmproxy）
   hashDir(hash, path.join(ROOT, '../core/src'))
   hashDir(hash, path.join(ROOT, '../mitmproxy/src'))
-  // package.json（版本号变化也应触发重建）
   hash.update(fs.readFileSync(path.join(ROOT, 'package.json')))
   return hash.digest('hex')
 }
@@ -171,8 +154,6 @@ function saveBuildHash (hash) {
   fs.writeFileSync(path.join(DIST, 'build-hash.txt'), hash)
 }
 
-// ── 主流程 ────────────────────────────────────────────
-
 async function main () {
   const buildAll = process.argv.includes('--all')
   const currentPlatform = getCurrentPlatform()
@@ -186,7 +167,6 @@ async function main () {
   fs.mkdirSync(DIST, { recursive: true })
   fs.mkdirSync(path.join(DIST, 'node-bin'), { recursive: true })
 
-  // 增量构建检查
   const currentHash = computeSourceHash()
   const cachedHash = getCachedBuildHash()
   const bundle = path.join(DIST, 'ds-cli-bundle.js')
@@ -194,10 +174,9 @@ async function main () {
   const skipBuild = cachedHash === currentHash && fs.existsSync(bundle) && fs.existsSync(blob)
 
   if (skipBuild) {
-    console.log('==> 源码未变化，跳过 esbuild 和 blob 生成（使用缓存）')
+    console.log('源码未变化，跳过 esbuild 和 blob 生成')
   } else {
-    // 清理旧构建产物（保留 node-bin 缓存）
-    console.log('==> 清理旧构建产物...')
+    console.log('清理旧构建产物...')
     for (const f of fs.readdirSync(DIST)) {
       if (f.startsWith('ds-cli-') || f === 'sea-config.json' || f === 'ds-cli-bundle.js' || f === 'ds-cli-prep.blob') {
         fs.rmSync(path.join(DIST, f), { force: true })
@@ -205,8 +184,7 @@ async function main () {
     }
     console.log()
 
-    // Step 1: esbuild
-    console.log('==> Step 1: esbuild 打包...')
+    console.log('Step 1: esbuild 打包...')
     const esbuild = require('esbuild')
     await esbuild.build({
       entryPoints: [path.join(ROOT, 'src/sea-entry.js')],
@@ -217,26 +195,21 @@ async function main () {
       outfile: bundle,
       external: [
         'node:*',
-        // 原生 .node 模块无法打进 SEA bundle，运行时 require 失败会被调用方 try/catch 兜底
         '@starknt/sysproxy',
-        // free-eye 为 ESM 模块且依赖源码目录数据，独立可执行文件中不可用；
-        // core 以相对路径 require 它，必须用通配符匹配，包名前缀匹配不到
         '*free-eye',
       ],
     })
     const bundleSize = (fs.statSync(bundle).size / 1024 / 1024).toFixed(1)
-    console.log(`    完成: ${bundle} (${bundleSize}MB)\n`)
+    console.log(`完成: ${bundle} (${bundleSize}MB)\n`)
   }
 
-  // Step 2: 获取校验和 + 确定目标平台
-  console.log('==> Step 2: 获取平台信息和校验和...')
+  console.log('Step 2: 获取平台信息和校验和...')
   const { checksums, platforms: availablePlatforms } = await fetchChecksums()
   const targets = buildAll ? availablePlatforms : [currentPlatform]
-  console.log(`    目标平台: ${targets.join(', ')}`)
+  console.log(`目标平台: ${targets.join(', ')}`)
   console.log()
 
-  // Step 3: 并行下载 Node.js 二进制
-  console.log('==> Step 3: 下载 Node.js 二进制（并行）...')
+  console.log('Step 3: 下载 Node.js 二进制...')
   const downloadTasks = targets.map(platform => downloadNodeBinary(platform, checksums))
   const results = await Promise.allSettled(downloadTasks)
 
@@ -245,20 +218,17 @@ async function main () {
     const result = results[i]
     const platform = targets[i]
     if (result.status === 'fulfilled') {
-      console.log(`    ${platform} 下载完成`)
+      console.log(`${platform} 下载完成`)
     } else {
-      console.error(`    ${platform} 下载失败: ${result.reason.message}`)
+      console.error(`${platform} 下载失败: ${result.reason.message}`)
       downloadFailed = true
     }
   }
   if (downloadFailed) process.exit(1)
   console.log()
 
-  // Step 4: 生成 SEA blob
-  // 使用已下载的当前平台 node 二进制生成 blob，保证 blob 与目标运行时（NODE_VERSION）完全一致，
-  // 避免 host node 版本与运行时版本不兼容导致的 "v8::ToLocalChecked Empty MaybeLocal" 崩溃
   if (!skipBuild) {
-    console.log('==> Step 4: 生成 SEA blob...')
+    console.log('Step 4: 生成 SEA blob...')
     const seaConfig = path.join(DIST, 'sea-config.json')
     fs.writeFileSync(seaConfig, JSON.stringify({
       main: bundle,
@@ -272,12 +242,11 @@ async function main () {
     console.log()
   }
 
-  // Step 5: 注入 blob
-  console.log('==> Step 5: 注入 SEA blob...')
+  console.log('Step 5: 注入 SEA blob...')
   for (const platform of targets) {
     const nodeBin = path.join(DIST, 'node-bin', `node-${platform}`)
     if (!fs.existsSync(nodeBin)) {
-      console.log(`    ${platform} 跳过（二进制不存在）`)
+      console.log(`${platform} 跳过`)
       continue
     }
 
@@ -290,55 +259,48 @@ async function main () {
       fs.chmodSync(output, 0o755)
     }
     const size = (fs.statSync(output).size / 1024 / 1024).toFixed(1)
-    console.log(`    ${platform} 完成: ${size}MB`)
+    console.log(`${platform} 完成: ${size}MB`)
   }
   console.log()
 
-  // Step 6: 验证
-  console.log('==> Step 6: 验证...')
+  console.log('Step 6: 验证...')
   const verifyBin = path.join(DIST, getOutputName(currentPlatform))
   if (fs.existsSync(verifyBin)) {
     try {
       const result = execSync(`"${verifyBin}" version`, { encoding: 'utf-8' }).trim()
       if (result === VERSION) {
-        console.log(`    验证通过: v${result}`)
+        console.log(`验证通过: v${result}`)
       } else {
-        console.error(`    验证失败: 期望 v${VERSION}, 实际 ${result}`)
+        console.error(`验证失败: 期望 v${VERSION}, 实际 ${result}`)
         process.exit(1)
       }
-      // 冒烟测试：加载 core（校验 bundle 完整性，如 free-eye 等外部模块是否正确排除）
       execSync(`"${verifyBin}" status`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
-      console.log('    冒烟测试通过: status')
+      console.log('冒烟测试通过: status')
     } catch (e) {
-      console.error(`    验证失败: ${e.message}`)
+      console.error(`验证失败: ${e.message}`)
       process.exit(1)
     }
   }
   console.log()
 
-  // 输出结果
-  console.log('==> 打包完成！')
+  console.log('打包完成')
   const files = fs.readdirSync(DIST).filter(f => f.startsWith('ds-cli-') && !f.endsWith('.js') && !f.endsWith('.blob') && !f.endsWith('.json'))
   for (const f of files) {
     const size = (fs.statSync(path.join(DIST, f)).size / 1024 / 1024).toFixed(1)
-    console.log(`    ${f}  (${size}MB)`)
+    console.log(`${f} (${size}MB)`)
   }
 }
-
-// ── 下载单个平台的 Node.js 二进制（含校验） ───────────
 
 async function downloadNodeBinary (platform, checksums) {
   const nodeBin = path.join(DIST, 'node-bin', `node-${platform}`)
 
-  // 如果已缓存且校验通过，跳过
   if (fs.existsSync(nodeBin)) {
     const expectedHash = checksums[getNodeFilename(platform)]
     if (expectedHash) {
       const actualHash = sha256(nodeBin)
       if (actualHash === expectedHash) {
-        return // 缓存有效，跳过
+        return
       }
-      // 校验失败，重新下载
       fs.rmSync(nodeBin, { force: true })
     }
   }
@@ -349,7 +311,6 @@ async function downloadNodeBinary (platform, checksums) {
   const tmpFile = path.join(DIST, 'node-bin', `tmp-${platform}`)
   await download(url, tmpFile)
 
-  // SHA256 校验
   const expectedHash = checksums[getNodeFilename(platform)]
   if (expectedHash) {
     const actualHash = sha256(tmpFile)
@@ -379,7 +340,6 @@ async function downloadNodeBinary (platform, checksums) {
   }
 }
 
-// 获取 SHASUMS256.txt 中对应的文件名
 function getNodeFilename (platform) {
   const map = {
     'linux-x64': `node-${NODE_VERSION}-linux-x64`,
