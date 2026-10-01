@@ -70,7 +70,6 @@ function handlePlugin (action, name) {
     process.exit(1)
   }
 
-  // free_eye 是一次性测试功能，直接 fork 执行
   if (name === 'free_eye') {
     if (action === 'stop') {
       console.log('free_eye 是一次性测试功能，stop 命令不适用')
@@ -84,11 +83,9 @@ function handlePlugin (action, name) {
     return
   }
 
-  // git/node/pip 不依赖代理服务，fork worker 立即生效
   const workerPath = path.join(__dirname, '../plugin-worker.js')
   const child = fork(workerPath, [action, name])
   child.on('exit', (code) => {
-    // 同时持久化到 config.json（重启后生效）
     const config = readConfig()
     config.plugin = config.plugin || {}
     config.plugin[name] = config.plugin[name] || {}
@@ -99,4 +96,9 @@ function handlePlugin (action, name) {
   })
 }
 
-module.exports = { handlePlugin, isOverwallUnlocked, getSettingsPath, getValidPlugins }
+module.exports = {
+  handlePlugin,
+  isOverwallUnlocked,
+  getSettingsPath,
+  getValidPlugins,
+}
