@@ -20,7 +20,6 @@ function loadConfig () {
   const mergeApi = require('@docmirror/dev-sidecar/src/merge')
   const jsonApi = require('@docmirror/mitmproxy/src/json')
 
-  // 读取用户配置
   const userConfigPath = configLoader.getUserConfigPath()
   let userConfig = {}
   if (fs.existsSync(userConfigPath)) {
@@ -29,12 +28,10 @@ function loadConfig () {
     } catch {}
   }
 
-  // 读取远程配置
   const remoteConfig = configLoader.getRemoteConfig()
   const personalRemoteConfig = configLoader.getRemoteConfig('_personal')
 
-  // 合并（与 core 相同的合并顺序）
-  const merged = lodash.cloneDeep(userConfig)
+  const merged = lodash.cloneDeep(userConfig || {})
   mergeApi.doMerge(merged, personalRemoteConfig)
   mergeApi.doMerge(merged, remoteConfig)
   mergeApi.doMerge(merged, defConfig)
@@ -51,21 +48,27 @@ function loadConfig () {
 // ── 准备服务配置 ──────────────────────────────────────
 
 function prepareServerConfig (allConfig) {
-  const serverConfig = lodash.cloneDeep(allConfig.server)
+  const serverConfig = lodash.cloneDeep(allConfig.server || {})
+  serverConfig.intercepts = serverConfig.intercepts || {}
+  serverConfig.dns = serverConfig.dns || {}
+  serverConfig.dns.mapping = serverConfig.dns.mapping || {}
+
   const intercepts = serverConfig.intercepts
   const dnsMapping = serverConfig.dns.mapping
 
   if (allConfig.plugin) {
     lodash.each(allConfig.plugin, (value) => {
       const plugin = value
-      if (!plugin.enabled) return
+      if (!plugin || !plugin.enabled) return
       if (plugin.intercepts) lodash.merge(intercepts, plugin.intercepts)
       if (plugin.dns) lodash.merge(dnsMapping, plugin.dns)
     })
   }
 
   if (allConfig.app) serverConfig.app = allConfig.app
-  if (serverConfig.intercept.enabled === false) serverConfig.intercepts = {}
+  if (serverConfig.intercept && serverConfig.intercept.enabled === false) {
+    serverConfig.intercepts = {}
+  }
   serverConfig.plugin = allConfig.plugin
   if (allConfig.proxy && allConfig.proxy.enabled) serverConfig.proxy = allConfig.proxy
 
@@ -77,12 +80,11 @@ function prepareServerConfig (allConfig) {
 async function startProxy (serverConfig) {
   const mitmproxy = require('@docmirror/mitmproxy')
 
-  // 设置 CA 证书路径
   if (serverConfig.setting && serverConfig.setting.userBasePath) {
     mitmproxy.config.setDefaultCABasePath(serverConfig.setting.userBasePath)
   }
 
-  // 设置根目录（GUI 脚本路径）
+  serverConfig.setting = serverConfig.setting || {}
   serverConfig.setting.rootDir = path.join(userBase, '../dev-sidecar-gui/')
 
   await mitmproxy.start(serverConfig)
@@ -104,9 +106,6 @@ async function runDaemon () {
   const log = require('@docmirror/dev-sidecar/src/utils/util.log-or-console')
 
   async function startup () {
-    const log = require('@docmirror/dev-sidecar/src/utils/util.log-or-console')
-
-    // 获取实例锁，防止 CLI/GUI 重复运行
     const DevSidecar = require('@docmirror/dev-sidecar')
     try {
       await DevSidecar.api.instance.acquireLock({ log })
@@ -125,8 +124,8 @@ async function runDaemon () {
       log.error('写入 running.json 实例信息失败:', e.message)
     }
 
-    const BANNER = `    ____                 _____ _     __
-   / __ \\___ _   __     / ___/(_)___/ /__  _________ ______
+    const BANNER = `    ____               _____ _     __
+   / __ \\___ _   __    / ___/(_)___/ /__   _________ ______
   / / / / _ \\ | / /_____\\__ \\/ / __  / _ \\/ ___/ __ \`/ ___/
  / /_/ /  __/ |/ /_____/__/ / / /_/ /  __/ /__/ /_/ / /
 /_____/\\___/|___/     /____/_/\\__,_/\\___/\\___/\\__,_/_/
@@ -138,7 +137,6 @@ async function runDaemon () {
     const allConfig = loadConfig()
     const serverConfig = prepareServerConfig(allConfig)
 
-    // 写入 running.json（供调试），保留现有 instance 信息
     const runningConfigPath = path.join(userBase, 'running.json')
     try {
       const jsonApi = require('@docmirror/mitmproxy/src/json')
@@ -158,16 +156,14 @@ async function runDaemon () {
       fs.writeFileSync(runningConfigPath, jsonApi.stringify(serverConfig))
     } catch {}
 
-    const mitmproxy = await startProxy(serverConfig)
+    await startProxy(serverConfig)
     log.info('dev-sidecar 已启动（同进程模式）')
 
-    // 主动同步状态到 running.json（SEA 模式不走 core 的 server/proxy 模块，状态事件不会自动触发）
     DevSidecar.api.instance.updateStatus('server.enabled', true)
     DevSidecar.api.instance.updateStatus('proxy.enabled', !!(allConfig.proxy && allConfig.proxy.enabled))
   }
 
   async function onClose () {
-    const log = require('@docmirror/dev-sidecar/src/utils/util.log-or-console')
     log.info('on sigint')
     try {
       const mitmproxy = require('@docmirror/mitmproxy')
@@ -196,52 +192,55 @@ async function routeCommand (args) {
 
   switch (command) {
     case 'start': {
-      // 锁检查：锁被持有说明 CLI 或 GUI 已在运行
       const DevSidecar = require('@docmirror/dev-sidecar')
       if (await DevSidecar.api.instance.isLocked()) {
         const instance = await DevSidecar.api.instance.readInstance()
         const typeLabel = instance?.type === 'gui' ? 'GUI' : 'CLI'
         console.log(`dev-sidecar ${typeLabel} 已在运行中${instance?.pid ? `（PID: ${instance.pid}）` : ''}，请先关闭后再启动 CLI`)
         process.exit(0)
-        break
       }
       const { fork } = require('node:child_process')
       const child = fork(__filename, ['--daemon'], { detached: true, stdio: 'ignore' })
       child.unref()
+      if (!child.pid) {
+        console.error('启动守护进程失败：无法获取进程 PID')
+        process.exit(1)
+      }
       fs.mkdirSync(path.dirname(PID_FILE), { recursive: true })
       fs.writeFileSync(PID_FILE, String(child.pid))
       console.log(`dev-sidecar 已在后台启动，PID: ${child.pid}`)
       process.exit(0)
-      break
     }
     case 'stop': {
       const { stopDaemon } = require('./commands/stop')
-      stopDaemon()
+      stopDaemon().then(() => process.exit(0)).catch(() => process.exit(1))
       break
     }
     case 'restart': {
       const { restartDaemon } = require('./commands/restart')
-      restartDaemon().then(() => process.exit(0))
+      restartDaemon().then(() => process.exit(0)).catch(() => process.exit(1))
       break
     }
     case 'status': {
       const { showStatus } = require('./commands/status')
-      showStatus().then(() => process.exit(0))
+      showStatus().then(() => process.exit(0)).catch(() => process.exit(1))
       break
     }
     case 'version': {
       console.log('2.2.1')
-      break
+      process.exit(0)
     }
     case 'plugin': {
       const { handlePlugin } = require('./commands/plugin')
-      handlePlugin(positional[1], positional[2])
+      Promise.resolve(handlePlugin(positional[1], positional[2]))
+        .then(() => process.exit(0))
+        .catch(() => process.exit(1))
       break
     }
     case 'proxy': {
       const { readConfig, writeConfig } = require('./commands/gui')
       if (positional[1] === 'on' || positional[1] === 'off') {
-        const config = readConfig()
+        const config = readConfig() || {}
         config.proxy = config.proxy || {}
         config.proxy.enabled = positional[1] === 'on'
         writeConfig(config)
@@ -270,7 +269,7 @@ async function routeCommand (args) {
     }
     case 'help': {
       printHelp()
-      break
+      process.exit(0)
     }
     default:
       console.error(`未知命令: ${command}`)
