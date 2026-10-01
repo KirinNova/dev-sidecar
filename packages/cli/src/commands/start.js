@@ -47,7 +47,8 @@ function isDsCliProcess (pid) {
   try {
     if (process.platform === 'win32') {
       const out = execSync(`tasklist /fi "PID eq ${pid}" /fo csv /nh`, { encoding: 'utf-8' })
-      return out.toLowerCase().includes('node')
+      const lower = out.toLowerCase()
+      return lower.includes('node') || lower.includes('ds-cli')
     }
     const out = execSync(`ps -p ${pid} -o args=`, { encoding: 'utf-8' })
     return out.includes('--daemon')
@@ -60,9 +61,11 @@ function isRunning () {
   const pidFile = getPidFile()
   if (!fs.existsSync(pidFile)) return false
   const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10)
-  if (!isAlive(pid)) return false
+  if (isNaN(pid) || pid <= 0 || !isAlive(pid)) return false
   if (!isDsCliProcess(pid)) {
-    fs.unlinkSync(pidFile)
+    try {
+      fs.unlinkSync(pidFile)
+    } catch {}
     return false
   }
   return true
@@ -77,8 +80,6 @@ function isGuiRunning () {
       })
       return out.includes('dev-sidecar.exe')
     }
-    // Linux/macOS: 查找 dev-sidecar 进程
-    // GUI 进程特征：包含 electron 或 .app（macOS 应用包）
     const out = execSync('pgrep -x dev-sidecar', { encoding: 'utf-8' }).trim()
     if (!out) return false
     const pids = out.split('\n').filter(Boolean)
@@ -97,7 +98,6 @@ function isGuiRunning () {
 }
 
 async function startDaemon () {
-  // 锁检查：锁被持有说明 CLI 或 GUI 已在运行
   const DevSidecar = require('@docmirror/dev-sidecar')
   if (await DevSidecar.api.instance.isLocked()) {
     const instance = await DevSidecar.api.instance.readInstance()
@@ -106,7 +106,6 @@ async function startDaemon () {
     return
   }
 
-  // 端口占用兜底检测
   const port = getProxyPort()
   if (await isPortInUse(port)) {
     console.log(`代理端口 ${port} 已被占用，dev-sidecar 可能已在运行`)
@@ -119,10 +118,15 @@ async function startDaemon () {
     stdio: 'ignore',
     env: {
       ...process.env,
-      DEV_SIDECAR_LOG_TO_CONSOLE: 'false', // 后台守护进程日志只写文件
+      DEV_SIDECAR_LOG_TO_CONSOLE: 'false',
     },
   })
   child.unref()
+
+  if (!child.pid) {
+    console.error('启动守护进程失败：无法获取进程 PID')
+    return
+  }
 
   fs.mkdirSync(path.dirname(getPidFile()), { recursive: true })
   fs.writeFileSync(getPidFile(), String(child.pid))
@@ -130,4 +134,13 @@ async function startDaemon () {
   console.log(`dev-sidecar 已在后台启动，PID: ${child.pid}`)
 }
 
-module.exports = { startDaemon, isRunning, PID_FILE: getPidFile(), getProxyPort, isPortInUse, isAlive, isDsCliProcess, isGuiRunning }
+module.exports = {
+  startDaemon,
+  isRunning,
+  PID_FILE: getPidFile(),
+  getProxyPort,
+  isPortInUse,
+  isAlive,
+  isDsCliProcess,
+  isGuiRunning,
+}
